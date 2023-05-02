@@ -526,6 +526,128 @@ static uint64_t MM86128(const void *key, const int len, uint32_t seed) {
     return (((uint64_t)h2)<<32)|h1;
 }
 
+//-----------------------------------------------------------------------------
+//
+// xxHash3
+//
+//-----------------------------------------------------------------------------
+#define XXH_PRIME_1 11400714785074694791ULL
+#define XXH_PRIME_2 14029467366897019727ULL
+#define XXH_PRIME_3 1609587929392839161ULL
+#define XXH_PRIME_4 9650029242287828579ULL
+#define XXH_PRIME_5 2870177450012600261ULL
+
+uint64_t XXH_read64(const void* memptr) {
+    uint64_t val;
+    memcpy(&val, memptr, sizeof(val));
+    return val;
+}
+
+uint32_t XXH_read32(const void* memptr) {
+    uint32_t val;
+    memcpy(&val, memptr, sizeof(val));
+    return val;
+}
+
+uint64_t XXH_rotl64(uint64_t x, int r) {
+    return (x << r) | (x >> (64 - r));
+}
+
+uint64_t xxh3(const void* data, size_t len, uint64_t seed) {
+    const uint8_t* p = (const uint8_t*)data;
+    const uint8_t* const end = p + len;
+    uint64_t h64;
+
+    if (len >= 32) {
+        const uint8_t* const limit = end - 32;
+        uint64_t v1 = seed + XXH_PRIME_1 + XXH_PRIME_2;
+        uint64_t v2 = seed + XXH_PRIME_2;
+        uint64_t v3 = seed + 0;
+        uint64_t v4 = seed - XXH_PRIME_1;
+
+        do {
+            v1 += XXH_read64(p) * XXH_PRIME_2;
+            v1 = XXH_rotl64(v1, 31);
+            v1 *= XXH_PRIME_1;
+
+            v2 += XXH_read64(p + 8) * XXH_PRIME_2;
+            v2 = XXH_rotl64(v2, 31);
+            v2 *= XXH_PRIME_1;
+
+            v3 += XXH_read64(p + 16) * XXH_PRIME_2;
+            v3 = XXH_rotl64(v3, 31);
+            v3 *= XXH_PRIME_1;
+
+            v4 += XXH_read64(p + 24) * XXH_PRIME_2;
+            v4 = XXH_rotl64(v4, 31);
+            v4 *= XXH_PRIME_1;
+
+            p += 32;
+        } while (p <= limit);
+
+        h64 = XXH_rotl64(v1, 1) + XXH_rotl64(v2, 7) + XXH_rotl64(v3, 12) + XXH_rotl64(v4, 18);
+
+        v1 *= XXH_PRIME_2;
+        v1 = XXH_rotl64(v1, 31);
+        v1 *= XXH_PRIME_1;
+        h64 ^= v1;
+        h64 = h64 * XXH_PRIME_1 + XXH_PRIME_4;
+
+        v2 *= XXH_PRIME_2;
+        v2 = XXH_rotl64(v2, 31);
+        v2 *= XXH_PRIME_1;
+        h64 ^= v2;
+        h64 = h64 * XXH_PRIME_1 + XXH_PRIME_4;
+
+        v3 *= XXH_PRIME_2;
+        v3 = XXH_rotl64(v3, 31);
+        v3 *= XXH_PRIME_1;
+        h64 ^= v3;
+        h64 = h64 * XXH_PRIME_1 + XXH_PRIME_4;
+
+        v4 *= XXH_PRIME_2;
+        v4 = XXH_rotl64(v4, 31);
+        v4 *= XXH_PRIME_1;
+        h64 ^= v4;
+        h64 = h64 * XXH_PRIME_1 + XXH_PRIME_4;
+    }
+    else {
+        h64 = seed + XXH_PRIME_5;
+    }
+
+    h64 += (uint64_t)len;
+
+    while (p + 8 <= end) {
+        uint64_t k1 = XXH_read64(p);
+        k1 *= XXH_PRIME_2;
+        k1 = XXH_rotl64(k1, 31);
+        k1 *= XXH_PRIME_1;
+        h64 ^= k1;
+        h64 = XXH_rotl64(h64, 27) * XXH_PRIME_1 + XXH_PRIME_4;
+        p += 8;
+    }
+
+    if (p + 4 <= end) {
+        h64 ^= (uint64_t)(XXH_read32(p)) * XXH_PRIME_1;
+        h64 = XXH_rotl64(h64, 23) * XXH_PRIME_2 + XXH_PRIME_3;
+        p += 4;
+    }
+
+    while (p < end) {
+        h64 ^= (*p) * XXH_PRIME_5;
+        h64 = XXH_rotl64(h64, 11) * XXH_PRIME_1;
+        p++;
+    }
+
+    h64 ^= h64 >> 33;
+    h64 *= XXH_PRIME_2;
+    h64 ^= h64 >> 29;
+    h64 *= XXH_PRIME_3;
+    h64 ^= h64 >> 32;
+
+    return h64;
+}
+
 uint64_t hashmap_sip(const void *data, size_t len,
                      uint64_t seed0, uint64_t seed1)
 {
@@ -537,6 +659,12 @@ uint64_t hashmap_murmur(const void *data, size_t len,
 {
     (void)seed1;
     return MM86128(data, len, seed0);
+}
+
+uint64_t hashmap_xxhash3(const void *data, size_t len,
+                         uint64_t seed0, uint64_t seed1){
+    (void)seed1;
+    return xxh3(data, len ,seed0);
 }
 
 //==============================================================================
@@ -621,11 +749,11 @@ static int compare_strs(const void *a, const void *b, void *udata) {
 }
 
 static uint64_t hash_int(const void *item, uint64_t seed0, uint64_t seed1) {
-    return hashmap_murmur(item, sizeof(int), seed0, seed1);
+    return hashmap_xxhash3(item, sizeof(int), seed0, seed1);
 }
 
 static uint64_t hash_str(const void *item, uint64_t seed0, uint64_t seed1) {
-    return hashmap_murmur(*(char**)item, strlen(*(char**)item), seed0, seed1);
+    return hashmap_xxhash3(*(char**)item, strlen(*(char**)item), seed0, seed1);
 }
 
 static void free_str(void *item) {
